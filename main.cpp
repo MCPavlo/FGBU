@@ -45,27 +45,32 @@ public:
         return true;
     }
 
-    std::map<std::string, Product> unload (size_t max_quantity) {
+    std::map<std::string, Product> unload(const std::string& product_name, size_t max_quantity) {
         std::map<std::string, Product> load;
         size_t total_units = 0;
 
-        for (auto& item : inventory) {
-            size_t quantity_to_take = std::min(item.second.quantity, max_quantity - total_units);
+        auto it = inventory.find(product_name);
+        if (it != inventory.end()) {
+            size_t quantity_to_take = std::min(it->second.quantity, max_quantity);
             if (quantity_to_take > 0) {
-                load[item.first] = Product(item.first, item.second.weight, item.second.packaging, quantity_to_take);
-                item.second.quantity -= quantity_to_take;
-                current_load -= quantity_to_take;
+                load[product_name] = Product(product_name, it->second.weight, it->second.packaging, quantity_to_take);
+                it->second.quantity -= quantity_to_take; // Уменьшаем количество
+                current_load -= quantity_to_take; // Уменьшаем текущую загрузку
                 total_units += quantity_to_take;
-                if (total_units >= max_quantity) break;
             }
         }
 
-        std::cout << "Склад отгружен на " << total_units << " ед.\n";
+        std::cout << "Склад отгружен на " << total_units << " ед. продукта " << product_name << ".\n";
         return load;
     }
 
     std::string getName() const {
         return name;
+    }
+
+    size_t getProductQuantity(const std::string& product_name) const {
+        auto it = inventory.find(product_name);
+        return (it != inventory.end()) ? it->second.quantity : 0;
     }
 
 private:
@@ -80,15 +85,15 @@ public:
     Factory(const std::string& name, double weight, const std::string& packaging, int production_rate)
             : name(name), weight(weight), packaging(packaging), production_rate(production_rate) {}
 
-    void storage(std::vector<Warehouse>& warehouses) {
+    void storage(std::vector<Warehouse*>& warehouses) {
         Product product = createProduct();
         size_t remaining_quantity = product.quantity;
 
         // Сначала пытаемся найти склад, который может вместить весь продукт
         for (auto& warehouse : warehouses) {
-            if (warehouse.getFreeSpace() >= remaining_quantity) {
-                if (warehouse.storeProduct(product)) {
-                    std::cout << "Продукт " << product.name << " полностью размещен на складе " << warehouse.getName() << "\n";
+            if (warehouse->getFreeSpace() >= remaining_quantity) {
+                if (warehouse->storeProduct(product)) {
+                    std::cout << "Продукт " << product.name << " полностью размещен на складе " << warehouse->getName() << "\n";
                     return; // Продукт успешно размещен
                 }
             }
@@ -100,11 +105,11 @@ public:
                 break;
             }
 
-            size_t free_space = warehouse.getFreeSpace();
+            size_t free_space = warehouse->getFreeSpace();
             if (free_space > 0) {
                 size_t quantity_to_store = std::min(remaining_quantity, free_space);
                 Product partial_product = Product(product.name, product.weight, product.packaging, quantity_to_store);
-                if (warehouse.storeProduct(partial_product)) {
+                if (warehouse->storeProduct(partial_product)) {
                     remaining_quantity -= quantity_to_store;
                 }
             }
@@ -112,7 +117,7 @@ public:
 
         if (remaining_quantity > 0) {
             std::cout << "Не удалось сохранить всю продукцию " << product.name
-                      << ": остаток " << remaining_quantity << " ед. на всех складах.\n";
+                      << ": остаток " << remaining_quantity << " ед.\n";
         }
     }
 
@@ -127,20 +132,75 @@ private:
     }
 };
 
+class Truck {
+public:
+    Truck(const std::string& name)
+            : name(name), product_name(""), product_count(0) {}
 
+    void loadProduct(const std::string& product_name, size_t count) {
+        this->product_name = product_name;
+        this->product_count += count;
+        std::cout << "Грузовик " << name << " загружен: " << count
+                  << " ед. продукта " << product_name << ".\n";
+    }
 
+    void unloadProduct(const std::string& shop_name) {
+        if (product_count > 0) {
+            std::cout << "Грузовик " << name << " выгружает: "
+                      << product_count << " ед. продукта " << product_name
+                      << " в " << shop_name << ".\n";
+            product_count = 0;
+            product_name = "";
+        } else {
+            std::cout << "Грузовик " << name << " пуст.\n";
+        }
+    }
+
+    void deliver(Warehouse* warehouse, const std::string& shop_name, const std::string& product_name, size_t count) {
+        // Проверяем, есть ли достаточно продукта на складе
+        size_t available_quantity = warehouse->getProductQuantity(product_name);
+        if (available_quantity < count) {
+            std::cout << "Недостаточно продукта " << product_name << " на складе " << warehouse->getName()
+                      << ". Доступно: " << available_quantity << ", запрашиваемое: " << count << ".\n";
+            return;
+        }
+
+        // Загружаем продукцию из склада
+        auto loaded_products = warehouse->unload(product_name, count);
+        for (const auto& item : loaded_products) {
+            loadProduct(item.first, item.second.quantity);
+        }
+
+        // Выгружаем продукцию в магазин
+        unloadProduct(shop_name);
+    }
+
+private:
+    std::string name;
+    std::string product_name;
+    size_t product_count;
+};
 
 int main() {
     // Создаем склады с названиями и вместимостью
-    Warehouse warehouseA("Склад A", 100); // Склад A на 100 ед.
-    Warehouse warehouseB("Склад B", 1); // Склад B на 100 ед.
-    std::vector<Warehouse> warehouses = { warehouseA, warehouseB };
+    Warehouse warehouseA("Склад A", 100);
+    Warehouse warehouseB("Склад B", 1);
+    std::vector<Warehouse*> warehouses = { &warehouseA, &warehouseB }; // Используем указатели
 
     // Создаем завод
-    Factory factory("Продукт A", 10.0, "Коробка", 999); // производит 70 единиц в час
+    Factory factory("Продукт A", 10.0, "Коробка", 90); // производит 90 единиц
 
     // Запускаем процесс хранения продукции
     factory.storage(warehouses);
+
+    // Создаем грузовик
+    Truck truck("Грузовик 1");
+
+    // Грузим продукцию из склада в магазин
+    truck.deliver(&warehouseA, "Магазин 1", "Продукт A", 50); // Должно сработать
+
+    // Попробуем еще раз забрать 40 единиц, теперь доступно только 40
+    truck.deliver(&warehouseA, "Магазин 1", "Продукт A", 40); // Это вызовет сообщение о недостатке
 
     return 0;
 }
