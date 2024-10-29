@@ -1,0 +1,3 @@
+/home/john_frick/FGBU/cmake-build-debug/CMakeFiles/FGBU.dir
+/home/john_frick/FGBU/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/john_frick/FGBU/cmake-build-debug/CMakeFiles/rebuild_cache.dir
