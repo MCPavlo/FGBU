@@ -24,6 +24,7 @@ public:
 
 class Warehouse {
 public:
+    void startAutoUnload(std::vector<class Truck*>& trucks, const std::string& shop_name);
     Warehouse(const std::string& name, size_t capacity);
     size_t getFreeSpace() const;
     bool storeProduct(const Product& product);
@@ -35,6 +36,7 @@ public:
     void autoUnload(std::vector<class Truck*>& trucks, const std::string& shop_name);
 
 private:
+    mutable std::mutex mtx;
     struct ArrivalLogEntry {
         std::string factory_name;
         std::string product_name;
@@ -48,6 +50,7 @@ private:
     size_t current_load;
     std::map<std::string, Product> inventory;
     std::vector<ArrivalLogEntry> arrival_log;
+    std::atomic<bool> is_unloading{false};
 
     void recordArrival(const Product& product);
 };
@@ -79,6 +82,7 @@ public:
     void addProduct(const std::string& product_name, size_t count) {
         if (product_count + count <= max_capacity) {
             product_count += count;
+
             std::cout << "Добавлено " << count << " ед. продукта " << product_name << " в грузовик " << name << ".\n";
         } else {
             std::cout << "Ошибка: не хватает места в грузовике " << name << " для добавления " << count << " ед. продукта " << product_name << ".\n";
@@ -90,6 +94,7 @@ private:
     size_t max_capacity;
     size_t product_count;
     size_t total_delivered;
+    std::map<std::string, size_t> loadedProducts;
     std::map<std::string, size_t> delivered_products;
     std::map<std::string, size_t> delivery_count;
 };

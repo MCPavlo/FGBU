@@ -1,5 +1,8 @@
 #include "classes.h"
 
+
+std::mutex coutMutex;
+
 // Product implementations
 Product::Product(const std::string& name, double weight, const std::string& packaging, size_t quantity)
         : name(name), weight(weight), packaging(packaging), quantity(quantity) {}
@@ -17,6 +20,7 @@ size_t Warehouse::getFreeSpace() const {
 bool Warehouse::storeProduct(const Product& product) {
     size_t free_space = getFreeSpace();
     if (product.quantity > free_space) {
+
         std::cout << "Предупреждение: недостаточно места для продукта " << product.name
                   << " на складе " << name << ". Запрашиваемое количество: " << product.quantity
                   << ", доступно: " << free_space << "\n";
@@ -25,6 +29,7 @@ bool Warehouse::storeProduct(const Product& product) {
     current_load += product.quantity;
     inventory[product.name] = product;
     recordArrival(product); // Записываем поступление продукции
+
     std::cout << "Продукция добавлена на склад " << name << ": " << product.name
               << " - " << product.quantity << " ед.\n";
     return true;
@@ -43,6 +48,7 @@ std::map<std::string, Product> Warehouse::unload(const std::string& product_name
             total_units += quantity_to_take;
         }
     }
+
     std::cout << "Склад" <<" " <<name << " "<<"отгружен на " << total_units << " ед. продукта " << product_name << ".\n";
     return load;
 }
@@ -57,8 +63,10 @@ size_t Warehouse::getProductQuantity(const std::string& product_name) const {
 }
 
 void Warehouse::printArrivalLog() const {
+
     std::cout << "Журнал поступления продукции на склад " << name << ":\n";
     for (const auto& entry : arrival_log) {
+
         std::cout << "Фабрика: " << entry.factory_name << ", Продукт: " << entry.product_name
                   << ", Количество: " << entry.quantity << "\n";
     }
@@ -67,53 +75,79 @@ void Warehouse::printArrivalLog() const {
 bool Warehouse::isOverloaded() const {
     double fill_percentage = static_cast<double>(current_load) / capacity * 100;
     if (fill_percentage >= 95.0) {
+
         std::cout << "Склад " << name << " загружен на " << fill_percentage << "% или более.\n";
         return true;
     }
     return false;
 }
 
+void Warehouse::startAutoUnload(std::vector<Truck*>& trucks, const std::string& shop_name) {
+    if (!is_unloading && isOverloaded()) { // Проверяем, не идет ли уже авторазгрузка и перегружен ли склад
+        is_unloading = true; // Устанавливаем флаг, чтобы избежать повторного запуска
+        std::thread(&Warehouse::autoUnload, this, std::ref(trucks), shop_name).detach(); // Запускаем авторазгрузку
+    }
+}
+
+
 void Warehouse::autoUnload(std::vector<Truck*>& trucks, const std::string& shop_name) {
-    for (auto& truck : trucks) {
-        // Проверка, перегружен ли склад
-        if (!isOverloaded()) {
-            break; // Если не перегружен, останавливаем авторазгрузку
-        }
+    {
+        // Логируем начало авторазгрузки с использованием глобального мьютекса для cout
+        std::lock_guard<std::mutex> coutLock(coutMutex);
+        std::cout << "---начало авторазгрузки---\n";
+    }
 
-        // Цикл по всем продуктам на складе
-        for (auto& productEntry : inventory) {
-            Product& product = productEntry.second;
-            size_t availableAmount = product.getQuantity(); // Получаем доступное количество продукта
-            size_t spaceInTruck = truck->getCapacity() - truck->getCurrentLoad(); // Свободное место в грузовике
+    // Основная авторазгрузка под мьютексом склада
+    {
+        std::lock_guard<std::mutex> lock(mtx); // Защищаем доступ к складу мьютексом
 
-            if (availableAmount == 0 || spaceInTruck == 0) {
-                continue; // Пропускаем продукт, если его нет или грузовик заполнен
-            }
-
-            // Вычисляем, сколько можем отгрузить
-            size_t unloadAmount = std::min(availableAmount, spaceInTruck);
-
-            // Если количество для выгрузки — 0, переходим к следующему продукту или грузовику
-            if (unloadAmount == 0) {
-                continue;
-            }
-
-            // Выгружаем продукцию
-            product.decreaseQuantity(unloadAmount);  // Уменьшаем количество продукта на складе
-            current_load -= unloadAmount; // Уменьшаем текущую загрузку склада
-            truck->addProduct(product.getName(), unloadAmount); // Добавляем продукт в грузовик
-
-            std::cout << "Склад отгружен на " << unloadAmount << " ед. продукта " << product.getName() << ".\n";
-
-            // Теперь сразу же выгружаем в магазин
-            truck->unloadProduct(shop_name);
-
-            // Проверка, нужно ли дальше разгружать
+        for (auto& truck : trucks) {
             if (!isOverloaded()) {
-                return; // Останавливаем авторазгрузку, если склад больше не перегружен
+                break; // Если не перегружен, останавливаем авторазгрузку
+            }
+
+            for (auto& productEntry : inventory) {
+                Product& product = productEntry.second;
+                size_t availableAmount = product.getQuantity();
+                size_t spaceInTruck = truck->getCapacity() - truck->getCurrentLoad();
+
+                if (availableAmount == 0 || spaceInTruck == 0) {
+                    continue;
+                }
+
+                size_t unloadAmount = std::min(availableAmount, spaceInTruck);
+
+                if (unloadAmount == 0) {
+                    continue;
+                }
+
+                product.decreaseQuantity(unloadAmount);
+                current_load -= unloadAmount;
+                truck->addProduct(product.getName(), unloadAmount);
+
+                // Логируем отгрузку под мьютексом для cout
+                {
+                    std::lock_guard<std::mutex> coutLock(coutMutex);
+                    std::cout << "Склад отгружен на " << unloadAmount << " ед. продукта " << product.getName() << ".\n";
+                }
+
+                // Вызываем unloadProduct за пределами основного мьютекса
+                truck->unloadProduct(shop_name);
+
+                if (!isOverloaded()) {
+                    break;
+                }
             }
         }
     }
+
+    // Логируем завершение авторазгрузки
+    {
+        std::lock_guard<std::mutex> coutLock(coutMutex);
+        std::cout << "--- конец авторазгрузки ---\n";
+    }
+
+    is_unloading = false; // Снимаем флаг после завершения авторазгрузки
 }
 
 
@@ -133,6 +167,7 @@ void Factory::storage(std::vector<Warehouse*>& warehouses) {
     for (auto& warehouse : warehouses) {
         if (warehouse->getFreeSpace() >= remaining_quantity) {
             if (warehouse->storeProduct(product)) {
+
                 std::cout << "Продукт " << product.name << " полностью размещен на складе " << warehouse->getName() << "\n";
                 return; // Продукт успешно размещен
             }
@@ -156,6 +191,7 @@ void Factory::storage(std::vector<Warehouse*>& warehouses) {
     }
 
     if (remaining_quantity > 0) {
+
         std::cout << "Не удалось сохранить всю продукцию " << product.name
                   << ": остаток " << remaining_quantity << " ед.\n";
     }
@@ -172,14 +208,21 @@ Truck::Truck(const std::string& name, size_t max_capacity)
 void Truck::loadProduct(const std::string& product_name, size_t count) {
     if (product_count + count <= max_capacity) {
         product_count += count;
+
         std::cout << "Загружено " << count << " ед. продукта " << product_name << " в грузовик " << name << ".\n";
     } else {
+
         std::cout << "Ошибка: не хватает места в грузовике " << name << " для загрузки " << count << " ед. продукта " << product_name << ".\n";
     }
 }
 
+
+
+
 void Truck::unloadProduct(const std::string& shop_name) {
     // Логика выгрузки в магазин
+
+
     std::cout << "Грузовик " << name << " выгружает продукцию в магазин " << shop_name << ".\n";
     product_count = 0; // После выгрузки грузовик пуст
 }
@@ -251,6 +294,7 @@ void Truck::deliver(const std::vector<Warehouse*>& warehouses, const std::string
         }
 
         if (remaining_quantity > 0) {
+
             std::cout << "Продукт " << product_name << " недоступен в необходимом количестве (" << required_quantity << " ед.) на складах.\n";
         }
     }
@@ -258,15 +302,18 @@ void Truck::deliver(const std::vector<Warehouse*>& warehouses, const std::string
     if (product_found) {
         unloadProduct(shop_name); // Если хоть один продукт загружен, выгружаем в магазин
     } else {
+
         std::cout << "Ни один продукт из заказа не найден на складах. Доставка отменена.\n";
     }
 }
 
 
 void Truck::printStatistics() const {
+
     std::cout << "Статистика грузовика " << name << ":\n";
     std::cout << "Общий объем доставленного: " << total_delivered << " ед.\n";
     for (const auto& product : delivered_products) {
+
         std::cout << "Продукт: " << product.first << ", Доставлено: " << product.second << " ед.\n";
     }
 }
@@ -274,14 +321,19 @@ void Truck::printStatistics() const {
 
 
 int main() {
-    std::cout<<"\n---ЗАГРУСКА СКЛАДОВ---\n\n";
-
     // Создаем склады с названиями и вместимостью
     Warehouse warehouseA("Склад A", 100);
     Warehouse warehouseB("Склад B", 100);
     std::vector<Warehouse*> warehouses = { &warehouseA, &warehouseB };
 
-    // Создаем завод
+    // Создаем грузовики
+    Truck truck("Грузовик 1", 1000);
+    Truck truck2("Грузовик 2", 1000);
+    std::vector<Truck*> trucks = { &truck, &truck2 };
+
+    std::cout << "\n---ЗАГРУСКА СКЛАДОВ---\n\n";
+
+    // Создаем заводы и наполняем склады
     Factory factory1("Продукт A", 10.0, "Коробка", 90);
     Factory factory2("Продукт 1", 10.0, "Коробка", 90);
     Factory factory3("Продукт A", 10.0, "Коробка", 90);
@@ -290,34 +342,38 @@ int main() {
     factory2.storage(warehouses);
     factory3.storage(warehouses);
 
+    // Добавляем паузу для просмотра состояния складов перед авторазгрузкой
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
+    std::cout << "\nЗапуск авторазгрузки для складов:\n";
+    for (auto* warehouse : warehouses) {
+        warehouse->startAutoUnload(trucks, "Магазин 1"); // Запуск авторазгрузки при необходимости
+    }
 
+    // Добавляем паузу для наблюдения за авторазгрузкой в фоне
+    std::this_thread::sleep_for(std::chrono::seconds(3));
 
-
-    std::cout<<"\n---------СОЗДАНИЕ И ОБРАБОТКА ЗАПРОСА НА ДОСТАВКУ-----------\n\n";
-
-    // Создаем грузовик
-    Truck truck("Грузовик 1", 1000);
-    Truck truck2("Грузовик 2", 1000);
+    std::cout << "\n---------СОЗДАНИЕ И ОБРАБОТКА ЗАПРОСА НА ДОСТАВКУ-----------\n\n";
     std::map<std::string, size_t> requests1 = {
-            {"Продукт A", 1},
-            {"Продукт 1", 1}
+            {"Продукт A", 10},
+            {"Продукт 1", 12}
     };
 
+    // Обрабатываем доставку
     truck.deliver(warehouses, "Магазин 1", requests1);
 
-    std::cout<<"\n-------ЖУРНАЛ ПОСТУПЛЕНИЙ-------\n\n";
+    // Добавляем паузу для завершения предыдущих процессов доставки
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
+    std::cout << "\n-------ЖУРНАЛ ПОСТУПЛЕНИЙ-------\n\n";
     warehouseA.printArrivalLog();
     warehouseB.printArrivalLog();
-    std::cout<<"\n---------СТАТИСТИКА ГРКЗОВИКОВ----------\n\n";
 
+    std::cout << "\n---------СТАТИСТИКА ГРУЗОВИКОВ----------\n\n";
     truck.printStatistics();
 
-    std::cout<<"\n---------ПРОВЕРКА АВТОВЫГРУЗКИ СКЛАДА--------\n\n";
-
-    std::vector<Truck*> trucks = { &truck, &truck2 };
-    warehouseA.autoUnload(trucks, "Магазин 1");
+    // Небольшая пауза перед завершением программы, чтобы убедиться, что все процессы завершены
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     return 0;
 }
