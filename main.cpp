@@ -92,18 +92,16 @@ void Warehouse::startAutoUnload(std::vector<Truck*>& trucks, const std::string& 
 
 void Warehouse::autoUnload(std::vector<Truck*>& trucks, const std::string& shop_name) {
     {
-        // Логируем начало авторазгрузки с использованием глобального мьютекса для cout
         std::lock_guard<std::mutex> coutLock(coutMutex);
         std::cout << "---начало авторазгрузки---\n";
     }
 
-    // Основная авторазгрузка под мьютексом склада
     {
-        std::lock_guard<std::mutex> lock(mtx); // Защищаем доступ к складу мьютексом
+        std::lock_guard<std::mutex> lock(mtx);
 
         for (auto& truck : trucks) {
             if (!isOverloaded()) {
-                break; // Если не перегружен, останавливаем авторазгрузку
+                break;
             }
 
             for (auto& productEntry : inventory) {
@@ -123,15 +121,15 @@ void Warehouse::autoUnload(std::vector<Truck*>& trucks, const std::string& shop_
 
                 product.decreaseQuantity(unloadAmount);
                 current_load -= unloadAmount;
+
+                // Используйте метод addProduct, чтобы обновить статистику грузовика
                 truck->addProduct(product.getName(), unloadAmount);
 
-                // Логируем отгрузку под мьютексом для cout
                 {
                     std::lock_guard<std::mutex> coutLock(coutMutex);
                     std::cout << "Склад отгружен на " << unloadAmount << " ед. продукта " << product.getName() << ".\n";
                 }
 
-                // Вызываем unloadProduct за пределами основного мьютекса
                 truck->unloadProduct(shop_name);
 
                 if (!isOverloaded()) {
@@ -141,15 +139,13 @@ void Warehouse::autoUnload(std::vector<Truck*>& trucks, const std::string& shop_
         }
     }
 
-    // Логируем завершение авторазгрузки
     {
         std::lock_guard<std::mutex> coutLock(coutMutex);
         std::cout << "--- конец авторазгрузки ---\n";
     }
 
-    is_unloading = false; // Снимаем флаг после завершения авторазгрузки
+    is_unloading = false;
 }
-
 
 void Warehouse::recordArrival(const Product& product) {
     arrival_log.emplace_back("Фабрика", product.name, product.quantity); // Записываем поступление
@@ -327,8 +323,8 @@ int main() {
     std::vector<Warehouse*> warehouses = { &warehouseA, &warehouseB };
 
     // Создаем грузовики
-    Truck truck("Грузовик 1", 1000);
-    Truck truck2("Грузовик 2", 1000);
+    Truck truck("Грузовик 1", 10);
+    Truck truck2("Грузовик 2", 8);
     std::vector<Truck*> trucks = { &truck, &truck2 };
 
     std::cout << "\n---ЗАГРУСКА СКЛАДОВ---\n\n";

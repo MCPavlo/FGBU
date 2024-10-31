@@ -82,10 +82,12 @@ public:
     void addProduct(const std::string& product_name, size_t count) {
         if (product_count + count <= max_capacity) {
             product_count += count;
+            total_delivered += count; // Увеличиваем общее количество доставленного
+            delivered_products[product_name] += count; // Увеличиваем количество доставленного конкретного продукта
 
-            std::cout << "Добавлено " << count << " ед. продукта " << product_name << " в грузовик " << name << ".\n";
+            std::cout << "Загружено " << count << " ед. продукта " << product_name << " в грузовик " << name << ".\n";
         } else {
-            std::cout << "Ошибка: не хватает места в грузовике " << name << " для добавления " << count << " ед. продукта " << product_name << ".\n";
+            std::cout << "Ошибка: не хватает места в грузовике " << name << " для загрузки " << count << " ед. продукта " << product_name << ".\n";
         }
     }
 
