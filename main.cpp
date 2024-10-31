@@ -3,13 +3,11 @@
 
 std::mutex coutMutex;
 
-// Product implementations
 Product::Product(const std::string& name, double weight, const std::string& packaging, size_t quantity)
         : name(name), weight(weight), packaging(packaging), quantity(quantity) {}
 
 Product::Product() : name(""), weight(0), packaging(""), quantity(0) {}
 
-// Warehouse implementations
 Warehouse::Warehouse(const std::string& name, size_t capacity)
         : name(name), capacity(capacity), current_load(0) {}
 
@@ -83,9 +81,11 @@ bool Warehouse::isOverloaded() const {
 }
 
 void Warehouse::startAutoUnload(std::vector<Truck*>& trucks, const std::string& shop_name) {
-    if (!is_unloading && isOverloaded()) { // Проверяем, не идет ли уже авторазгрузка и перегружен ли склад
-        is_unloading = true; // Устанавливаем флаг, чтобы избежать повторного запуска
-        std::thread(&Warehouse::autoUnload, this, std::ref(trucks), shop_name).detach(); // Запускаем авторазгрузку
+    std::unique_lock<std::mutex> lock(mtx);  // добавляем блокировку для предотвращения гонки
+    if (!is_unloading && isOverloaded()) {   // проверка перегрузки склада
+        is_unloading = true;                 // установка флага авторазгрузки
+        lock.unlock();                       // отпускаем блокировку перед запуском потока
+        std::thread(&Warehouse::autoUnload, this, std::ref(trucks), shop_name).detach();
     }
 }
 
@@ -93,59 +93,68 @@ void Warehouse::startAutoUnload(std::vector<Truck*>& trucks, const std::string& 
 void Warehouse::autoUnload(std::vector<Truck*>& trucks, const std::string& shop_name) {
     {
         std::lock_guard<std::mutex> coutLock(coutMutex);
-        std::cout << "---начало авторазгрузки---\n";
+        std::cout << "--- начало авторазгрузки для склада"<< name <<  "---\n";
     }
 
-    {
-        std::lock_guard<std::mutex> lock(mtx);
+    std::unique_lock<std::mutex> lock(mtx); // Блокировка склада на время авторазгрузки
 
-        for (auto& truck : trucks) {
-            if (!isOverloaded()) {
-                break;
+    // Сортируем грузовики по их текущей загруженности
+    std::sort(trucks.begin(), trucks.end(), [](Truck* a, Truck* b) {
+        return (a->getCapacity() - a->getCurrentLoad()) > (b->getCapacity() - b->getCurrentLoad());
+    });
+
+    for (auto& truck : trucks) {
+        if (!isOverloaded()) {
+            break; // Прерываем, если склад уже не перегружен
+        }
+
+        for (auto& productEntry : inventory) {
+            Product& product = productEntry.second;
+            size_t availableAmount = product.getQuantity();
+
+            std::unique_lock<std::mutex> truckLock(truck->mtx); // Блокировка для операций с грузовиком
+
+            size_t spaceInTruck = truck->getCapacity() - truck->getCurrentLoad();
+
+            if (availableAmount == 0 || spaceInTruck == 0) {
+                continue; // Если продукта или места в грузовике нет, переходим к следующему
             }
 
-            for (auto& productEntry : inventory) {
-                Product& product = productEntry.second;
-                size_t availableAmount = product.getQuantity();
-                size_t spaceInTruck = truck->getCapacity() - truck->getCurrentLoad();
+            size_t unloadAmount = std::min(availableAmount, spaceInTruck);
 
-                if (availableAmount == 0 || spaceInTruck == 0) {
-                    continue;
-                }
+            if (unloadAmount == 0) {
+                continue;
+            }
 
-                size_t unloadAmount = std::min(availableAmount, spaceInTruck);
+            // Отгружаем продукты
+            product.decreaseQuantity(unloadAmount);
+            current_load -= unloadAmount;
 
-                if (unloadAmount == 0) {
-                    continue;
-                }
+            // Обновляем грузовик
+            truck->addProduct(product.getName(), unloadAmount);
 
-                product.decreaseQuantity(unloadAmount);
-                current_load -= unloadAmount;
+            {
+                std::lock_guard<std::mutex> coutLock(coutMutex);
+                std::cout << "Склад отгружен на " << unloadAmount << " ед. продукта " << product.getName()
+                          << " для грузовика " << truck->getName() << ".\n";
+            }
 
-                // Используйте метод addProduct, чтобы обновить статистику грузовика
-                truck->addProduct(product.getName(), unloadAmount);
+            truck->unloadProduct(shop_name);
 
-                {
-                    std::lock_guard<std::mutex> coutLock(coutMutex);
-                    std::cout << "Склад отгружен на " << unloadAmount << " ед. продукта " << product.getName() << ".\n";
-                }
-
-                truck->unloadProduct(shop_name);
-
-                if (!isOverloaded()) {
-                    break;
-                }
+            if (!isOverloaded()) {
+                break; // Прерываем, если склад уже не перегружен
             }
         }
     }
 
     {
         std::lock_guard<std::mutex> coutLock(coutMutex);
-        std::cout << "--- конец авторазгрузки ---\n";
+        std::cout << "--- конец авторазгрузки для склада"<< name <<  "---\n";
     }
 
-    is_unloading = false;
+    is_unloading = false; // Сброс состояния авторазгрузки
 }
+
 
 void Warehouse::recordArrival(const Product& product) {
     arrival_log.emplace_back("Фабрика", product.name, product.quantity); // Записываем поступление
@@ -367,6 +376,7 @@ int main() {
 
     std::cout << "\n---------СТАТИСТИКА ГРУЗОВИКОВ----------\n\n";
     truck.printStatistics();
+    truck2.printStatistics();
 
     // Небольшая пауза перед завершением программы, чтобы убедиться, что все процессы завершены
     std::this_thread::sleep_for(std::chrono::seconds(2));

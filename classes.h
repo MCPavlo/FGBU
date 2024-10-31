@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 class Product {
 public:
@@ -78,6 +79,7 @@ public:
     void printStatistics() const;
     size_t getCapacity() {return max_capacity;}
     size_t getCurrentLoad() const { return product_count; } // Add this method
+    std::string getName(){return name;}
 
     void addProduct(const std::string& product_name, size_t count) {
         if (product_count + count <= max_capacity) {
@@ -91,6 +93,7 @@ public:
         }
     }
 
+    mutable std::mutex mtx;
 private:
     std::string name;
     size_t max_capacity;
